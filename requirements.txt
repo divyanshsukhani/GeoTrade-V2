@@ -1,0 +1,9 @@
+requests
+feedparser
+newsapi-python
+transformers
+torch
+spacy
+schedule
+beautifulsoup4
+conceptnet-lite
