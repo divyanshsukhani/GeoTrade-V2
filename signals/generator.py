@@ -3,6 +3,8 @@
 from config import ASSET_MAP, MIN_RISK_SCORE
 from detector.ontology import enrich_article
 
+HIGH_PRIORITY_COUNTRIES = ["Iran", "Russia", "China", "Israel", "Ukraine"]
+
 
 def generate_signal(label, sentiment, sentiment_score, entities, enrichment):
 
@@ -17,7 +19,13 @@ def generate_signal(label, sentiment, sentiment_score, entities, enrichment):
     elif sentiment == "positive":
         base_confidence = sentiment_score * 0.5
     else:
-        base_confidence = 0.3
+        # neutral — use label strength
+        if label in ["military attack", "economic sanctions"]:
+            base_confidence = 0.5
+        elif label in ["geopolitical conflict", "energy and oil markets"]:
+            base_confidence = 0.45
+        else:
+            base_confidence = 0.3
 
     # boost from ontology
     risk_multiplier = enrichment.get("risk_multiplier", 1.0)
@@ -36,18 +44,17 @@ def generate_signal(label, sentiment, sentiment_score, entities, enrichment):
         signal = "BUY"
 
     # ── GOLD FILTER ──
-    # Gold fires too easily — require stronger evidence
     if asset == "Gold" and signal == "BUY":
 
-        has_war_keyword = any(
-            kw in (entities.get("countries", []) + entities.get("locations", []))
-            for kw in ["Iran", "Russia", "Israel", "Ukraine", "China"]
+        is_high_priority = any(
+            c in entities.get("countries", [])
+            for c in HIGH_PRIORITY_COUNTRIES
         )
-        has_waterway    = len(waterways) > 0
-        high_sentiment  = sentiment_score >= 0.75
-        opec_involved   = enrichment.get("is_opec_involved", False)
+        has_war_keyword  = is_high_priority
+        has_waterway     = len(waterways) > 0
+        high_sentiment   = sentiment_score >= 0.75
+        opec_involved    = enrichment.get("is_opec_involved", False)
 
-        # need at least 2 strong signals to fire Gold BUY
         strong_signals = sum([
             has_war_keyword,
             has_waterway,
@@ -55,10 +62,13 @@ def generate_signal(label, sentiment, sentiment_score, entities, enrichment):
             opec_involved
         ])
 
-        if strong_signals < 2:
-            # downgrade to HOLD
-            asset  = "None"
-            signal = "HOLD"
+        # high priority countries need only 1 strong signal
+        # others need 2
+        required = 1 if is_high_priority else 2
+
+        if strong_signals < required:
+            asset      = "None"
+            signal     = "HOLD"
             confidence = confidence * 0.5
 
     # de-escalation → sell safe havens
@@ -66,8 +76,7 @@ def generate_signal(label, sentiment, sentiment_score, entities, enrichment):
         signal = "SELL"
 
     # ── MINIMUM CONFIDENCE ──
-    # never fire a signal below 0.5 unless it has waterway backing
-    if confidence < 0.5 and not waterways:
+    if confidence < 0.40 and not waterways:
         asset  = "None"
         signal = "HOLD"
 
@@ -100,6 +109,30 @@ if __name__ == "__main__":
             "entities": {
                 "countries":     ["Iran", "UAE"],
                 "locations":     ["Fujairah", "Persian Gulf"],
+                "organizations": [],
+                "persons":       []
+            }
+        },
+        {
+            "title":      "Clock is ticking for Iran - Trump",
+            "label":      "geopolitical conflict",
+            "sentiment":  "neutral",
+            "sent_score": 0.494,
+            "entities": {
+                "countries":     ["Iran", "US"],
+                "locations":     [],
+                "organizations": [],
+                "persons":       ["Trump"]
+            }
+        },
+        {
+            "title":      "Cuba vows to annihilate US invaders",
+            "label":      "military attack",
+            "sentiment":  "neutral",
+            "sent_score": 0.557,
+            "entities": {
+                "countries":     ["Cuba", "US"],
+                "locations":     [],
                 "organizations": [],
                 "persons":       []
             }
@@ -138,18 +171,6 @@ if __name__ == "__main__":
                 "locations":     ["Nord Stream", "Black Sea"],
                 "organizations": [],
                 "persons":       []
-            }
-        },
-        {
-            "title":      "Dennis Kucinich: How We Can Stop This War",
-            "label":      "geopolitical conflict",
-            "sentiment":  "negative",
-            "sent_score": 0.3,
-            "entities": {
-                "countries":     [],
-                "locations":     [],
-                "organizations": [],
-                "persons":       ["Dennis Kucinich"]
             }
         }
     ]

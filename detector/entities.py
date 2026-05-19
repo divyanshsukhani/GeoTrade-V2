@@ -7,6 +7,34 @@ from config import HF_API_KEY
 API_URL = "https://router.huggingface.co/hf-inference/models/dslim/bert-base-NER"
 HEADERS = {"Authorization": f"Bearer {HF_API_KEY}"}
 
+KNOWN_PLACES = [
+    "Strait of Hormuz", "Strait of Malacca",
+    "Persian Gulf", "Black Sea", "South China Sea",
+    "Nord Stream", "Suez Canal", "Red Sea",
+    "Bab-el-Mandeb", "Arabian Sea", "Caspian Sea"
+]
+
+KNOWN_COUNTRIES = [
+    "iran", "russia", "ukraine", "israel", "china",
+    "usa", "us", "uk", "germany", "france", "india",
+    "pakistan", "turkey", "egypt", "uae", "saudi arabia",
+    "cuba", "estonia", "belarus", "syria", "iraq", "yemen"
+]
+
+
+def fix_split_places(locations, text):
+    fixed = list(locations)
+    for place in KNOWN_PLACES:
+        if place.lower() in text.lower():
+            # remove ALL partial word matches
+            parts = place.split()
+            fixed = [l for l in fixed 
+                     if l not in parts 
+                     and not any(l == p for p in parts)]
+            if place not in fixed:
+                fixed.append(place)
+    return list(dict.fromkeys(fixed))
+
 
 def extract_entities(title, description):
     text = (title + ". " + description)[:512]
@@ -26,20 +54,39 @@ def extract_entities(title, description):
             organizations = []
             persons       = []
 
-            # merge consecutive entities of same type
+            # merge subword tokens only
             merged = []
             for entity in result:
                 label = entity.get("entity_group", "") or entity.get("entity", "")
                 word  = entity.get("word", "")
 
-                if merged and merged[-1]["label"] == label:
-                    merged[-1]["word"] += " " + word.replace("##", "")
+                if word.startswith("##") and merged:
+                    merged[-1]["word"] += word.replace("##", "")
+                elif (merged and
+                      merged[-1]["label"] == label and
+                      entity.get("start", 0) == merged[-1].get("end", -1)):
+                    merged[-1]["word"] += " " + word
+                    merged[-1]["end"]   = entity.get("end", 0)
                 else:
-                    merged.append({"word": word.replace("##", ""), "label": label})
+                    merged.append({
+                        "word":  word,
+                        "label": label,
+                        "start": entity.get("start", 0),
+                        "end":   entity.get("end",   0)
+                    })
 
             for entity in merged:
-                word  = entity["word"].strip()
-                label = entity["label"]
+                word       = entity["word"].strip()
+                label      = entity["label"]
+                word_lower = word.lower()
+
+                # split merged country names like "Iran US"
+                found = [c for c in KNOWN_COUNTRIES if c in word_lower]
+                if len(found) > 1:
+                    for c in found:
+                        countries.append(c.title())
+                        locations.append(c.title())
+                    continue
 
                 if "LOC" in label:
                     locations.append(word)
@@ -48,6 +95,10 @@ def extract_entities(title, description):
                     organizations.append(word)
                 elif "PER" in label:
                     persons.append(word)
+
+            # fix known multi-word places
+            locations = fix_split_places(locations, text)
+            countries = fix_split_places(countries, text)
 
             return {
                 "countries":     list(dict.fromkeys(countries)),
@@ -81,6 +132,10 @@ if __name__ == "__main__":
         {
             "title": "Ukraine receives weapons from NATO allies",
             "description": "US and UK send missiles to Kyiv as conflict with Russia intensifies near Crimea."
+        },
+        {
+            "title": "Congress is a huge target for spies",
+            "description": "China Russia Iran are targeting US officials according to intelligence reports."
         }
     ]
 
